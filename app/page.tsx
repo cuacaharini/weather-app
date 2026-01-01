@@ -1,13 +1,11 @@
 import WeatherCard from "@/components/WeatherCard"
 import CitySearch from "@/components/CitySearch"
-import { getCurrentWeather } from "@/lib/weather"
-import DailyForecast from "@/components/DailyForecast"
 import HourlyForecast from "@/components/HourlyForecast"
-import { getForecast } from "@/lib/weather"
+import DailyForecast from "@/components/DailyForecast"
+import { getCurrentWeather, getForecast } from "@/lib/weather"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
-
 
 function formatToday() {
   return new Date().toLocaleDateString("id-ID", {
@@ -27,8 +25,10 @@ type PageProps = {
 export default async function Home({ searchParams }: PageProps) {
   const params = searchParams ? await searchParams : {}
   const city = params.city || "Jakarta"
-  const forecast = await getForecast(city)
+
+  // 🔒 SAFE FETCH (REDIS-FIRST DI BACKEND)
   const weather = await getCurrentWeather(city)
+  const forecast = await getForecast(city)
 
   return (
     <main className="min-h-screen bg-slate-900 text-white px-4 py-6">
@@ -42,23 +42,27 @@ export default async function Home({ searchParams }: PageProps) {
         </header>
 
         <CitySearch />
+
         <p className="text-xs text-slate-400">
           {formatToday()}
         </p>
 
-        <WeatherCard
-          temperature={weather.temperature}
-          condition={weather.condition}
-          icon={weather.icon}
-          wind={weather.wind}
-          humidity={weather.humidity}
-          rainIntensity={weather.rainIntensity}
-          observedAt={weather.observedAt}
-        />
+        {/* ✅ CURRENT WEATHER (GUARDED) */}
+        {weather && (
+          <WeatherCard
+            temperature={weather.temperature}
+            condition={weather.condition}
+            icon={weather.icon}
+            wind={weather.wind}
+            humidity={weather.humidity}
+            rainIntensity={weather.rainIntensity}
+            observedAt={weather.observedAt}
+          />
+        )}
 
-        <HourlyForecast hours={forecast.hourly} />
-        <DailyForecast days={forecast.daily} />
-
+        {/* ✅ FORECAST (GUARDED) */}
+        <HourlyForecast hours={forecast?.hourly ?? []} />
+        <DailyForecast days={forecast?.daily ?? []} />
 
       </div>
     </main>
