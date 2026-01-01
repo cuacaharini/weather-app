@@ -38,7 +38,7 @@ export default async function Home({ searchParams }: PageProps) {
           </p>
         </header>
 
-        <CitySearch defaultCity={city} />
+        <CitySearch />
         <p className="text-xs text-slate-400">
           {formatToday()}
         </p>
