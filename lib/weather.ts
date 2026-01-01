@@ -75,7 +75,13 @@ export async function getForecast(city: string) {
      HOURLY FORECAST
      (8 jam ke depan)
   ====================== */
+  const now = new Date()
+
   const hourly = data.timelines.hourly
+    .filter((h: any) => {
+      const forecastTime = new Date(h.time)
+      return forecastTime.getTime() > now.getTime()
+    })
     .slice(0, 8)
     .map((h: any) => {
       const code = h.values.weatherCode
@@ -89,6 +95,7 @@ export async function getForecast(city: string) {
         icon: weatherInfo.icon,
       }
     })
+
 
   /* ======================
      DAILY FORECAST

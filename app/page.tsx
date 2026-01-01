@@ -5,6 +5,9 @@ import DailyForecast from "@/components/DailyForecast"
 import HourlyForecast from "@/components/HourlyForecast"
 import { getForecast } from "@/lib/weather"
 
+export const dynamic = "force-dynamic"
+export const revalidate = 0
+
 
 function formatToday() {
   return new Date().toLocaleDateString("id-ID", {
