@@ -1,145 +1,131 @@
-import { redis } from "./redis"
+import { redis } from "@/lib/redis"
 import { weatherCodeMap } from "./weatherCodes"
 
 const API_KEY = process.env.TOMORROW_API_KEY!
 
-/* ======================================================
-   CURRENT WEATHER (REDIS FIRST)
-====================================================== */
-export async function getCurrentWeather(city: string) {
-  const cacheKey = `weather:${city.toLowerCase()}`
+/* ======================
+   TYPES
+====================== */
+export type CurrentWeather = {
+  temperature: number
+  condition: string
+  icon: string
+  wind: number
+  humidity: number
+  rainIntensity: number
+  observedAt: string
+}
 
-  // 1️⃣ Redis first
-  const cached = await redis.get(cacheKey)
+export type HourlyItem = {
+  time: string
+  temperature: number
+  condition: string
+  icon: string
+}
+
+export type DailyItem = {
+  date: string
+  min: number
+  max: number
+  condition: string
+  icon: string
+}
+
+export type ForecastData = {
+  hourly: HourlyItem[]
+  daily: DailyItem[]
+}
+
+/* ======================
+   CURRENT WEATHER
+====================== */
+export async function getCurrentWeather(
+  city: string
+): Promise<CurrentWeather> {
+  const cacheKey = `current:${city.toLowerCase()}`
+
+  const cached = await redis.get<CurrentWeather>(cacheKey)
   if (cached) return cached
 
-  // 2️⃣ Fetch realtime weather (UTC)
-  const url = `https://api.tomorrow.io/v4/weather/realtime
-    ?location=${encodeURIComponent(city)}
-    &fields=temperature,weatherCode,windSpeed,humidity,rainIntensity
-    &units=metric
-    &apikey=${API_KEY}
-  `.replace(/\s+/g, "")
+  const url = `https://api.tomorrow.io/v4/weather/realtime?location=${encodeURIComponent(
+    city
+  )}&apikey=${API_KEY}`
 
   const res = await fetch(url, { cache: "no-store" })
-  if (!res.ok) {
-    console.warn("Realtime API error:", res.status)
-    return null
-  }
+  if (!res.ok) throw new Error("Failed to fetch current weather")
 
   const json = await res.json()
-  const values = json?.data?.values
-  if (!values) return null
+  const values = json.data.values
 
-  const info =
-    weatherCodeMap[values.weatherCode] ??
-    { label: "Cloudy", icon: "☁️" }
+  const code = values.weatherCode
+  const info = weatherCodeMap[code] ?? {
+    label: "Unknown",
+    icon: "Cloud",
+  }
 
-  const result = {
+  const result: CurrentWeather = {
     temperature: Math.round(values.temperature),
     condition: info.label,
     icon: info.icon,
     wind: Math.round(values.windSpeed),
     humidity: Math.round(values.humidity),
-    rainIntensity: Number(values.rainIntensity ?? 0),
-    observedAt: json.data.time, // UTC
+    rainIntensity: values.precipitationIntensity ?? 0,
+    observedAt: json.data.time,
   }
 
-  // 3️⃣ Cache 10 menit
   await redis.set(cacheKey, result, { ex: 600 })
-
   return result
 }
 
-/* ======================================================
-   FORECAST (REDIS FIRST, UTC SAFE)
-====================================================== */
-export async function getForecast(city: string) {
-  // bucket cache per 30 menit (hindari spam API)
-  const nowUTC = new Date()
-  const bucket = `${nowUTC.getUTCHours()}-${Math.floor(
-    nowUTC.getUTCMinutes() / 30
-  )}`
-
-  const cacheKey = `forecast:${city.toLowerCase()}:${bucket}`
-
-  // 1️⃣ Redis first
-  const cached = await redis.get(cacheKey)
+/* ======================
+   FORECAST
+====================== */
+export async function getForecast(
+  city: string
+): Promise<ForecastData> {
+  const cacheKey = `forecast:${city.toLowerCase()}`
+  const cached = await redis.get<ForecastData>(cacheKey)
   if (cached) return cached
 
-  // 2️⃣ Fetch forecast (UTC)
-  const url = `https://api.tomorrow.io/v4/weather/forecast
-    ?location=${encodeURIComponent(city)}
-    &timesteps=hourly,daily
-    &fields=temperature,temperatureMin,temperatureMax,rainIntensity,weatherCode
-    &units=metric
-    &apikey=${API_KEY}
-  `.replace(/\s+/g, "")
+  const url = `https://api.tomorrow.io/v4/weather/forecast?location=${encodeURIComponent(
+    city
+  )}&apikey=${API_KEY}`
 
   const res = await fetch(url, { cache: "no-store" })
-  if (!res.ok) {
-    console.warn("Forecast API error:", res.status)
-    return { hourly: [], daily: [] }
-  }
+  if (!res.ok) throw new Error("Failed to fetch forecast")
 
   const json = await res.json()
-  const nowTimeUTC = Date.now()
 
-  /* ======================
-     HOURLY (NEXT HOURS ONLY)
-     👉 STRICT UTC COMPARISON
-  ====================== */
-  const hourly = json.timelines.hourly
-    .filter((h: any) => {
-      const t = new Date(h.time).getTime()
-      return t > nowTimeUTC // 🔑 INI KUNCI UTAMA
-    })
-    .slice(0, 8)
-    .map((h: any) => {
+  const hourly: HourlyItem[] =
+    json.timelines.hourly.slice(1, 9).map((h: any) => {
       const info =
         weatherCodeMap[h.values.weatherCode] ??
-        { label: "Cloudy", icon: "☁️" }
+        { label: "Unknown", icon: "Cloud" }
 
       return {
-        time: h.time, // UTC (UI convert ke WIB)
+        time: h.time,
         temperature: Math.round(h.values.temperature),
         condition: info.label,
         icon: info.icon,
       }
     })
 
-  /* ======================
-     DAILY (H+1 s/d H+3)
-     👉 UTC-BASED, NO TODAY
-  ====================== */
-  const todayUTC = new Date()
-  todayUTC.setUTCHours(0, 0, 0, 0)
-
-  const daily = json.timelines.daily
-    .filter((d: any) => {
-      const t = new Date(d.time).getTime()
-      return t > todayUTC.getTime()
-    })
-    .slice(0, 3)
-    .map((d: any) => {
-      let condition = "Cloudy"
-      const rain = Number(d.values.rainIntensity ?? 0)
-
-      if (rain > 2) condition = "Heavy Rain"
-      else if (rain > 0.5) condition = "Rain"
-      else if (rain > 0) condition = "Drizzle"
+  const daily: DailyItem[] =
+    json.timelines.daily.slice(1, 4).map((d: any) => {
+      const info =
+        weatherCodeMap[d.values.weatherCodeMax] ??
+        { label: "Unknown", icon: "Cloud" }
 
       return {
-        date: d.time, // UTC
-        minTemp: Math.round(d.values.temperatureMin),
-        maxTemp: Math.round(d.values.temperatureMax),
-        condition,
+        date: d.time,
+        min: Math.round(d.values.temperatureMin),
+        max: Math.round(d.values.temperatureMax),
+        condition: info.label,
+        icon: info.icon,
       }
     })
 
-  const result = { hourly, daily }
-
-  // 3️⃣ Cache forecast 30 menit
+  const result: ForecastData = { hourly, daily }
   await redis.set(cacheKey, result, { ex: 1800 })
 
   return result
