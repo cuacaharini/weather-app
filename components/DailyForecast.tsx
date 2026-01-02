@@ -6,6 +6,7 @@ type DayItem = {
   minTemp: number
   maxTemp: number
   condition: string
+  icon: string
 }
 
 function formatDate(dateStr: string) {
