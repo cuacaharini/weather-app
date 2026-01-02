@@ -3,9 +3,25 @@ import { weatherCodeMap } from "./weatherCodes"
 
 const API_KEY = process.env.TOMORROW_API_KEY!
 
-/* =========================
+/* ======================================================
+   UTIL: HITUNG START JAM BERIKUTNYA (WIB)
+====================================================== */
+function getNextHourWIB(): Date {
+  const now = new Date()
+
+  // UTC → WIB
+  now.setHours(now.getHours() + 7)
+
+  // set ke awal jam berikutnya
+  now.setMinutes(0, 0, 0)
+  now.setHours(now.getHours() + 1)
+
+  return now
+}
+
+/* ======================================================
    CURRENT WEATHER (REDIS FIRST)
-========================= */
+====================================================== */
 export async function getCurrentWeather(city: string) {
   const cacheKey = `weather:${city.toLowerCase()}`
 
@@ -15,7 +31,7 @@ export async function getCurrentWeather(city: string) {
     return cached
   }
 
-  // 2️⃣ FETCH API
+  // 2️⃣ FETCH TOMORROW.IO
   const url = `https://api.tomorrow.io/v4/weather/realtime
     ?location=${encodeURIComponent(city)}
     &fields=temperature,weatherCode,windSpeed,humidity,rainIntensity
@@ -53,13 +69,14 @@ export async function getCurrentWeather(city: string) {
   return result
 }
 
-/* =========================
-   FORECAST (REDIS FIRST + TIME BUCKET)
-========================= */
+/* ======================================================
+   FORECAST (REDIS FIRST + TIME SAFE)
+====================================================== */
 export async function getForecast(city: string) {
-  const now = new Date()
-  const bucket = `${now.getUTCHours()}-${Math.floor(
-    now.getUTCMinutes() / 30
+  // ⏱️ cache bucket per 30 menit
+  const nowUTC = new Date()
+  const bucket = `${nowUTC.getUTCHours()}-${Math.floor(
+    nowUTC.getUTCMinutes() / 30
   )}`
 
   const cacheKey = `forecast:${city.toLowerCase()}:${bucket}`
@@ -70,7 +87,7 @@ export async function getForecast(city: string) {
     return cached
   }
 
-  // 2️⃣ FETCH API
+  // 2️⃣ FETCH TOMORROW.IO
   const url = `https://api.tomorrow.io/v4/weather/forecast
     ?location=${encodeURIComponent(city)}
     &timesteps=hourly,daily
@@ -87,9 +104,17 @@ export async function getForecast(city: string) {
 
   const data = await res.json()
 
-  // HOURLY (future only)
+  /* ======================
+     HOURLY (NEXT HOURS – WIB SAFE)
+  ====================== */
+  const startHourWIB = getNextHourWIB()
+
   const hourly = data.timelines.hourly
-    .filter((h: any) => new Date(h.time).getTime() > Date.now())
+    .filter((h: any) => {
+      const forecast = new Date(h.time)
+      forecast.setHours(forecast.getHours() + 7) // UTC → WIB
+      return forecast >= startHourWIB
+    })
     .slice(0, 8)
     .map((h: any) => {
       const info =
@@ -97,16 +122,27 @@ export async function getForecast(city: string) {
         { label: "Cloudy", icon: "☁️" }
 
       return {
-        time: h.time,
+        time: h.time, // tetap UTC, konversi di UI
         temperature: Math.round(h.values.temperature),
         condition: info.label,
         icon: info.icon,
       }
     })
 
-  // DAILY (H+1 → H+3)
+  /* ======================
+     DAILY (H+1 → H+3, WIB SAFE)
+  ====================== */
+  const todayWIB = new Date()
+  todayWIB.setHours(todayWIB.getHours() + 7)
+  todayWIB.setHours(0, 0, 0, 0)
+
   const daily = data.timelines.daily
-    .slice(1, 4)
+    .filter((d: any) => {
+      const date = new Date(d.time)
+      date.setHours(date.getHours() + 7)
+      return date > todayWIB
+    })
+    .slice(0, 3)
     .map((d: any) => {
       let condition = "Cloudy"
       const rain = Number(d.values.rainIntensity ?? 0)
@@ -116,7 +152,7 @@ export async function getForecast(city: string) {
       else if (rain > 0) condition = "Drizzle"
 
       return {
-        date: d.time,
+        date: d.time, // tetap UTC
         minTemp: Math.round(d.values.temperatureMin),
         maxTemp: Math.round(d.values.temperatureMax),
         condition,
