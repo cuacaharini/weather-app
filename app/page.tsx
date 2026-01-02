@@ -4,6 +4,7 @@ import HourlyForecast from "@/components/HourlyForecast"
 import DailyForecast from "@/components/DailyForecast"
 import { getCurrentWeather, getForecast } from "@/lib/weather"
 
+export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const revalidate = 0
 
