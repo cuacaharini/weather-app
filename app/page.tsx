@@ -2,20 +2,16 @@ import WeatherCard from "@/components/WeatherCard"
 import CitySearch from "@/components/CitySearch"
 import HourlyForecast from "@/components/HourlyForecast"
 import DailyForecast from "@/components/DailyForecast"
-import { getCurrentWeather, getForecast } from "@/lib/weather"
+import {
+  getCurrentWeather,
+  getForecast,
+  type CurrentWeather,
+  type ForecastData,
+} from "@/lib/weather"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export const revalidate = 0
-
-function formatToday() {
-  return new Date().toLocaleDateString("id-ID", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  })
-}
 
 type PageProps = {
   searchParams?: Promise<{
@@ -27,9 +23,15 @@ export default async function Home({ searchParams }: PageProps) {
   const params = searchParams ? await searchParams : {}
   const city = params.city || "Jakarta"
 
-  // 🔒 SAFE FETCH (REDIS-FIRST DI BACKEND)
-  const weather = await getCurrentWeather(city)
-  const forecast = await getForecast(city)
+  let weather: CurrentWeather | null = null
+  let forecast: ForecastData | null = null
+
+  try {
+    weather = await getCurrentWeather(city)
+    forecast = await getForecast(city)
+  } catch (err) {
+    console.error(err)
+  }
 
   return (
     <main className="min-h-screen bg-slate-900 text-white px-4 py-6">
@@ -37,18 +39,11 @@ export default async function Home({ searchParams }: PageProps) {
 
         <header>
           <h1 className="text-2xl font-semibold">Weather</h1>
-          <p className="text-slate-400 text-sm">
-            {city}
-          </p>
+          <p className="text-slate-400 text-sm">{city}</p>
         </header>
 
         <CitySearch />
 
-        <p className="text-xs text-slate-400">
-          {formatToday()}
-        </p>
-
-        {/* ✅ CURRENT WEATHER (GUARDED) */}
         {weather && (
           <WeatherCard
             temperature={weather.temperature}
@@ -61,10 +56,12 @@ export default async function Home({ searchParams }: PageProps) {
           />
         )}
 
-        {/* ✅ FORECAST (GUARDED) */}
-        <HourlyForecast hours={forecast?.hourly ?? []} />
-        <DailyForecast days={forecast?.daily ?? []} />
-
+        {forecast && (
+          <>
+            <HourlyForecast hours={forecast.hourly} />
+            <DailyForecast days={forecast.daily} />
+          </>
+        )}
       </div>
     </main>
   )
